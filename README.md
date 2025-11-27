@@ -13,11 +13,16 @@ A BentoML-based service that emulates OpenAI's Chat Completion and Models APIs w
   - Returns list of available model names
   - Compatible with OpenAI API format
 
+- **Multimodal Support (GPT-4 Vision)**
+  - Support for text + image inputs (base64 and URL formats)
+  - Compatible with OpenAI GPT-4 Vision API format
+  - Images are accepted but not actually processed (mock responses)
+
 - **Precise Token Counting with TikToken**
-  - Uses OpenAI's official `tiktoken` library for accurate token counting
+  - Uses OpenAI's official `tiktoken` library for accurate output token counting
   - Exact token-level control for response lengths
   - True token-by-token streaming (not word-based)
-  - Accurate usage statistics in API responses
+  - Input tokens use simple estimation, output tokens are precise
 
 - **Customizable Timing Parameters**
   - `X-TTFT-MS`: Time To First Token in milliseconds
@@ -86,7 +91,58 @@ curl -X POST http://localhost:3000/v1/chat/completions \
 curl http://localhost:3000/v1/models
 ```
 
-#### 4. Health Check
+#### 4. Multimodal Requests (Images)
+
+```bash
+# Base64 image
+curl -X POST http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-OUTPUT-LENGTH: 30" \
+  -d '{
+    "model": "gpt-4-vision-preview",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "请描述这张图片"},
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            }
+          }
+        ]
+      }
+    ],
+    "stream": false
+  }'
+
+# URL image
+curl -X POST http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-OUTPUT-LENGTH: 25" \
+  -d '{
+    "model": "gpt-4-vision-preview",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "请描述这张图片"},
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "https://example.com/cat.png",
+              "detail": "high"
+            }
+          }
+        ]
+      }
+    ],
+    "stream": false
+  }'
+```
+
+#### 5. Health Check
 
 ```bash
 curl http://localhost:3000/health
@@ -117,9 +173,13 @@ curl http://localhost:3000/health
 
 ### Manual Testing
 
-Run the test script to verify all endpoints:
+Run the test scripts to verify endpoints:
 
 ```bash
+# Test multimodal (image) requests
+python test_multimodal.py
+
+# Test all endpoints (if available)
 python test_api.py
 ```
 
@@ -175,6 +235,29 @@ stream = client.chat.completions.create(
 for chunk in stream:
     if chunk.choices[0].delta.content is not None:
         print(chunk.choices[0].delta.content, end="")
+
+# Multimodal (Vision) example
+response = client.chat.completions.create(
+    model="gpt-4-vision-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "请描述这张图片"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                    }
+                }
+            ]
+        }
+    ],
+    extra_headers={
+        "X-OUTPUT-LENGTH": "30"
+    }
+)
+print(response.choices[0].message.content)
 ```
 
 ## Response Format

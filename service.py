@@ -12,9 +12,22 @@ import tiktoken
 
 
 # Pydantic models for request/response
+class ImageUrl(BaseModel):
+    url: str
+    detail: Optional[str] = "auto"  # auto, low, high
+
+
+class ContentItem(BaseModel):
+    type: str  # "text" or "image_url"
+    text: Optional[str] = None
+    image_url: Optional[ImageUrl] = None
+
+
 class Message(BaseModel):
     role: str
-    content: str
+    content: Optional[str | List[ContentItem]] = (
+        None  # Support both string and array formats
+    )
 
 
 class ChatCompletionRequest(BaseModel):
@@ -74,9 +87,14 @@ class ModelsResponse(BaseModel):
 
 app = FastAPI()
 
+my_image = bentoml.images.Image(python_version="3.11").requirements_file(
+    "requirements.txt"
+)
+
 
 @bentoml.asgi_app(app)
 @bentoml.service(
+    image=my_image,
     name="openai_emulator",
     workers=16,
 )
@@ -137,23 +155,6 @@ class OpenAIEmulator:
         except Exception:
             # Fallback if tiktoken encoding fails
             return len(text) // 4
-
-    def _count_message_tokens(self, messages: List[Message]) -> int:
-        """Count tokens in messages list"""
-        total_tokens = 0
-
-        for message in messages:
-            # Add tokens for message content
-            total_tokens += self._count_tokens(message.content)
-            # Add tokens for role (approximate: 1-3 tokens)
-            total_tokens += self._count_tokens(message.role)
-            # Add tokens for message formatting (approximate: 3 tokens per message)
-            total_tokens += 3
-
-        # Add tokens for conversation formatting
-        total_tokens += 3
-
-        return total_tokens
 
     def _generate_response_content(self, target_tokens: int) -> str:
         """Generate response content with exact token count using tiktoken"""
@@ -368,9 +369,11 @@ class OpenAIEmulator:
                 # Generate non-streaming response
                 content = self._generate_response_content(output_length)
 
-                # Calculate accurate token counts
-                prompt_tokens = self._count_message_tokens(request_data.messages)
-                completion_tokens = self._count_tokens(content)
+                # Calculate token counts (only output needs to be accurate)
+                prompt_tokens = (
+                    len(str(request_data.messages)) // 4
+                )  # Simple estimate for input
+                completion_tokens = self._count_tokens(content)  # Accurate for output
                 total_tokens = prompt_tokens + completion_tokens
 
                 response = ChatCompletionResponse(
