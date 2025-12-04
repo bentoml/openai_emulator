@@ -134,15 +134,16 @@ class OpenAIEmulator:
             # Fallback if tiktoken fails to initialize
             self.encoding = None
 
-    def _get_timing_params(self, request: Request) -> tuple[float, float, int]:
+    def _get_timing_params(self, request: Request) -> tuple[float, float, int, int]:
         """Extract timing parameters from headers"""
         ttft_ms = float(request.headers.get("X-TTFT-MS", 100))  # Default 100ms
         itl_ms = float(request.headers.get("X-ITL-MS", 50))  # Default 50ms
         output_length = int(
             request.headers.get("X-OUTPUT-LENGTH", 20)
         )  # Default 20 tokens
+        sse_batch_size = int(request.headers.get("X-SSE-BATCH-SIZE", 4))  # Default 4 tokens per chunk
 
-        return ttft_ms / 1000.0, itl_ms / 1000.0, output_length
+        return ttft_ms / 1000.0, itl_ms / 1000.0, output_length, sse_batch_size
 
     def _count_tokens(self, text: str) -> int:
         """Count tokens in text using tiktoken"""
@@ -242,6 +243,7 @@ class OpenAIEmulator:
         ttft: float,
         itl: float,
         output_length: int,
+        sse_batch_size: int,
     ) -> AsyncGenerator[str, None]:
         """Generate streaming response chunks"""
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -275,13 +277,15 @@ class OpenAIEmulator:
                 # Encode content to get actual tokens
                 tokens = self.encoding.encode(content)
 
-                # Stream each token
-                for i, token in enumerate(tokens):
-                    if i > 0:  # Wait ITL between tokens (except first)
+                # Stream tokens in batches (automatically handles partial last batch)
+                for i in range(0, len(tokens), sse_batch_size):
+                    if i > 0:  # Wait ITL between batches (except first)
                         await asyncio.sleep(itl)
 
-                    # Decode single token to text
-                    token_text = self.encoding.decode([token])
+                    # Get batch of tokens (slice handles partial batches automatically)
+                    token_batch = tokens[i:i + sse_batch_size]
+                    # Decode batch to text
+                    batch_text = self.encoding.decode(token_batch)
 
                     chunk = ChatCompletionStreamResponse(
                         id=request_id,
@@ -290,18 +294,22 @@ class OpenAIEmulator:
                         choices=[
                             DeltaChoice(
                                 index=0,
-                                delta={"content": token_text},
+                                delta={"content": batch_text},
                                 finish_reason=None,
                             )
                         ],
                     )
                     yield f"data: {chunk.model_dump_json()}\n\n"
             except Exception:
-                # Fallback to word-based streaming
+                # Fallback to word-based streaming in batches
                 words = content.split()
-                for i, word in enumerate(words):
+                for i in range(0, len(words), sse_batch_size):
                     if i > 0:
                         await asyncio.sleep(itl)
+
+                    # Get batch of words
+                    word_batch = words[i:i + sse_batch_size]
+                    batch_text = " ".join(word_batch) + " "
 
                     chunk = ChatCompletionStreamResponse(
                         id=request_id,
@@ -310,18 +318,22 @@ class OpenAIEmulator:
                         choices=[
                             DeltaChoice(
                                 index=0,
-                                delta={"content": word + " "},
+                                delta={"content": batch_text},
                                 finish_reason=None,
                             )
                         ],
                     )
                     yield f"data: {chunk.model_dump_json()}\n\n"
         else:
-            # Fallback to word-based streaming
+            # Fallback to word-based streaming in batches
             words = content.split()
-            for i, word in enumerate(words):
+            for i in range(0, len(words), sse_batch_size):
                 if i > 0:
                     await asyncio.sleep(itl)
+
+                # Get batch of words
+                word_batch = words[i:i + sse_batch_size]
+                batch_text = " ".join(word_batch) + " "
 
                 chunk = ChatCompletionStreamResponse(
                     id=request_id,
@@ -329,7 +341,7 @@ class OpenAIEmulator:
                     model=request_data.model,
                     choices=[
                         DeltaChoice(
-                            index=0, delta={"content": word + " "}, finish_reason=None
+                            index=0, delta={"content": batch_text}, finish_reason=None
                         )
                     ],
                 )
@@ -353,12 +365,12 @@ class OpenAIEmulator:
             request_data = ChatCompletionRequest(**body)
 
             # Get timing parameters from headers
-            ttft, itl, output_length = self._get_timing_params(request)
+            ttft, itl, output_length, sse_batch_size = self._get_timing_params(request)
 
             if request_data.stream:
                 # Return streaming response
                 return StreamingResponse(
-                    self._stream_response(request_data, ttft, itl, output_length),
+                    self._stream_response(request_data, ttft, itl, output_length, sse_batch_size),
                     media_type="text/plain",
                     headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
                 )
