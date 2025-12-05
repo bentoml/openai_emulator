@@ -27,9 +27,10 @@ A BentoML-based service that emulates OpenAI's Chat Completion and Models APIs w
 - **Customizable Timing Parameters**
   - `X-TTFT-MS`: Time To First Token in milliseconds
   - `X-ITL-MS`: Inter-Token Latency in milliseconds
-    - **Streaming**: Delay between each actual token
+    - **Streaming**: Delay between each token batch
     - **Non-streaming**: Per-token processing delay (total = ITL × output_length)
   - `X-OUTPUT-LENGTH`: Output length in exact tokens (not approximate)
+  - `X-SSE-BATCH-SIZE`: Number of tokens to combine per SSE chunk (streaming only, default: 4)
 
 - **Health Check** (`/health`)
   - Service health monitoring endpoint
@@ -78,6 +79,7 @@ curl -X POST http://localhost:3000/v1/chat/completions \
   -H "X-TTFT-MS: 150" \
   -H "X-ITL-MS: 75" \
   -H "X-OUTPUT-LENGTH: 30" \
+  -H "X-SSE-BATCH-SIZE: 8" \
   -d '{
     "model": "gpt-4",
     "messages": [
@@ -155,12 +157,19 @@ curl http://localhost:3000/health
 | Header | Description | Default | Example |
 |--------|-------------|---------|---------|
 | `X-TTFT-MS` | Time to first token (ms) | 100 | 200 |
-| `X-ITL-MS` | **Streaming**: delay between tokens<br>**Non-streaming**: per-token processing delay | 50 | 75 |
+| `X-ITL-MS` | **Streaming**: delay between token batches<br>**Non-streaming**: per-token processing delay | 50 | 75 |
 | `X-OUTPUT-LENGTH` | Output length in **exact tokens** using tiktoken | 20 | 30 |
+| `X-SSE-BATCH-SIZE` | **Streaming only**: tokens per SSE chunk (partial batches handled automatically) | 4 | 8 |
 
 **Timing Calculation Examples:**
-- **Streaming** (30 tokens, TTFT=200ms, ITL=75ms): 200ms + (29 × 75ms) = ~2.4s total
+- **Streaming** (30 tokens, TTFT=200ms, ITL=75ms, batch=4): 200ms + (ceil(30/4)-1 × 75ms) = ~725ms total
 - **Non-streaming** (30 tokens, TTFT=200ms, ITL=75ms): 200ms + (30 × 75ms) = ~2.5s total
+
+**SSE Batch Processing:**
+- Tokens are grouped into batches before sending as SSE chunks
+- Example: 10 tokens with batch_size=4 → 3 chunks: [4 tokens], [4 tokens], [2 tokens]
+- Partial batches are automatically handled (no tokens are lost)
+- ITL delay occurs between batches, not individual tokens
 
 ### Available Models
 
@@ -225,7 +234,8 @@ stream = client.chat.completions.create(
     extra_headers={
         "X-TTFT-MS": "150",
         "X-ITL-MS": "75",
-        "X-OUTPUT-LENGTH": "30"
+        "X-OUTPUT-LENGTH": "30",
+        "X-SSE-BATCH-SIZE": "8"
     }
 )
 
